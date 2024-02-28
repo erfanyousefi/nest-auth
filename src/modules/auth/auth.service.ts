@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -7,12 +8,13 @@ import {InjectRepository} from "@nestjs/typeorm";
 import {UserEntity} from "../user/entities/user.entity";
 import {Repository} from "typeorm";
 import {OTPEntity} from "../user/entities/otp.entity";
-import {CheckOtpDto, SendOtpDto} from "./dto/auth.dto";
+import {CheckOtpDto, SendOtpDto} from "./dto/otp.dto";
 import {randomInt} from "crypto";
 import {JwtService} from "@nestjs/jwt";
 import {ConfigService} from "@nestjs/config";
 import {TokensPayload} from "./types/payload";
-
+import {LoginDto, SignupDto} from "./dto/basic.dto";
+import {hashSync, genSaltSync, compareSync} from "bcrypt";
 @Injectable()
 export class AuthService {
   constructor(
@@ -72,6 +74,50 @@ export class AuthService {
       message: "You logged-in successfully",
     };
   }
+  async signup(signupDto: SignupDto) {
+    const {first_name, last_name, email, password, mobile} = signupDto;
+    await this.checkEmail(email);
+    await this.checkMobile(mobile);
+    let hashedPassword = this.hashPasswors(password);
+    const user = this.userRepository.create({
+      first_name,
+      last_name,
+      mobile,
+      email,
+      password: hashedPassword,
+      mobile_verify: false,
+    });
+    await this.userRepository.save(user);
+    return {
+      message: "user signup successfully",
+    };
+  }
+  async login(loginDto: LoginDto) {
+    const {email, password} = loginDto;
+    const user = await this.userRepository.findOneBy({email});
+    if (!user)
+      throw new UnauthorizedException("username or password is incorrect");
+    if (!compareSync(password, user.password)) {
+      throw new UnauthorizedException("username or password is incorrect");
+    }
+    const {accessToken, refreshToken} = this.makeTokensForUser({
+      mobile: user.mobile,
+      id: user.id,
+    });
+    return {
+      accessToken,
+      refreshToken,
+      message: "you logged-in successfully",
+    };
+  }
+  async checkEmail(email: string) {
+    const user = await this.userRepository.findOneBy({email});
+    if (user) throw new ConflictException("email is already exist");
+  }
+  async checkMobile(mobile: string) {
+    const user = await this.userRepository.findOneBy({mobile});
+    if (user) throw new ConflictException("mobile number is already exist");
+  }
   async createOtpForUser(user: UserEntity) {
     const expiresIn = new Date(new Date().getTime() + 1000 * 60 * 2);
     const code = randomInt(10000, 99999).toString();
@@ -123,5 +169,9 @@ export class AuthService {
     } catch (error) {
       throw new UnauthorizedException("login on your account ");
     }
+  }
+  hashPasswors(password: string) {
+    const salt = genSaltSync(10);
+    return hashSync(password, salt);
   }
 }
